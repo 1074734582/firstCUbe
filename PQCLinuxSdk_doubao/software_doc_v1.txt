@@ -1,0 +1,113 @@
+
+1.文件目录
+	algotest		可执行程序
+	application		可执行代码
+	build.sh		编译脚本
+	common			openssl库
+  	driver			驱动程序代码
+  	hx_ctrl_drv.ko		驱动ko文件
+  	library			所有第三方库	
+  	sdk			API代码
+
+2.benchmark.c里的int main(int argc, char const *argv[]) 为可执行程序入口，编译生成可执行程序 algotest。
+  	例如./algotest 1 4 0 1， 执行int hx_rpu_pub_benchmark(int fd, int algo, int mode, int loop)。algo==4为HX_PQC， mode==0为HX_KYBER512_KG。loop==1为执行一次加密。
+  	以下为对应算法的声明:
+  	typedef enum hx_func_id_ {
+	    HX_SM2 = 0,
+	    HX_ECC = 1,
+	    HX_RSA = 2,
+	    HX_TRNG = 3,
+	    HX_PQC = 4,
+	} hx_func_id_e;
+
+	typedef enum hx_sm2_mode_ {
+	    HX_SM2_SIGN = 0,
+	    HX_SM2_VERIFY = 1,
+	    HX_SM2_KP = 2,
+	    HX_SM2_KG = 3,
+	    HX_SM2_SIGN_TRNG = 4,
+	} hx_sm2_mode_e;
+
+	typedef enum hx_rsa_mode_ {
+	    HX_RSA_SIGN_1024 = 0,
+	    HX_RSA_SIGN_1024_CRT = 1,
+	    HX_RSA_VERIFY_1024 = 2,
+	    HX_RSA_SIGN_2048 = 3,
+	    HX_RSA_SIGN_2048_CRT = 4,
+	    HX_RSA_VERIFY_2048 = 5,
+	} hx_rsa_mode_e;
+
+	typedef enum hx_pqc_mode_ {
+	    HX_KYBER512_KG      = 0,
+	    HX_KYBER512_SIGN    = 1,
+	    HX_KYBER512_VERIFY  = 2,
+	    HX_AIGIS_KG         = 3,
+	    HX_AIGIS_SIGN       = 4,
+	    HX_AIGIS_VERIFY     = 5,
+	    HX_LAC128_KG        = 6,
+	    HX_LAC128_SIGN      = 7,
+	    HX_LAC128_VERIFY    = 8,
+	    HX_SPHINCS_KG       = 9,
+	    HX_SPHINCS_SIGN     = 10,
+	    HX_SPHINCS_VERIFY   = 11,
+	    HX_HQC_KG           = 12,
+	    HX_HQC_SIGN         = 13,
+	    HX_HQC_VERIFY       = 14,
+	    HX_BIKE_SIGN        = 15,
+	    HX_BIKE_VERIFY      = 16,
+	    HX_MCELIECE_SIGN    = 17,
+	    HX_MCELIECE_VERIFY  = 18,
+	    HX_DILI2_KG         = 19,
+	    HX_DILI2_SIGN       = 20,
+	    HX_DILI2_VERIFY     = 21,
+	    HX_FALCON_SIGN      = 22,
+	    HX_FALCON_VERIFY    = 23,
+	} hx_pqc_mode_e;
+	
+3.int hx_rpu_pqc(hx_cipher_t *cipher, int mode, int loop)为PQC算法的程序入口
+  	get_pqc_req_len()定义加密前数据长度，get_pqc_res_axi_len()定义加密后数据长度。
+  	hx_pqc_init_data()初始化各个算法的结构体，以及初始化对应软件库。
+  	pqc_build_random_data()根据各个算法初始化随机数据。
+  	hx_ioctl_pub_do()将数据发送给内核。
+  	pqc_compare_random_data()将解密数据与软件库对比，确认加密是否正确。
+  
+4.应用层通过ret = ioctl(ctx->fd, IOCTL_PUB_OP, &param);将数据传递传递给内核。
+	目前为同步模式，即等待收到解密数据后，返回应用层。若无解密数据返回，等待10秒超时返回应用层。
+	build_pqc_request()为PQC算法的申请函数
+  	build_trng_request()为随机数的申请函数
+  	build_pub_request()为SM2和RSA的申请函数
+  
+ 5.PQC算核支持两种数据通路，FIFO和AXI。
+ 	FIFO通路支持连续多包同时发送，AXI仅支持单包发送
+  	FIFO通路定义为HX_FIFO_RING_BUS，AXI通路定义为HX_AXI_RING_BUS
+  	
+  	pqc_config_data_init()初始化各个算法的constdata和taskcode
+  	pqc_fifo_response_transmit()为发送回复包的申请数据
+  	pqc_fifo_request_transmit()为发送请求包的申请数据
+  	
+  	UPIF_PKG_LEN定义UPIF通路每次最大传输2048Bytes。PQC算法数据量大，需要申请包和数据包支持多包发送
+  	
+  	HX_REG_WRITE(base + UPIF_CMD_REQ_TRIG, 0x03);将请求包和回复包发送给RING。
+  	
+ 6.RING是DMA通路，将PCIE内存里的数据拷贝给算核，而不需CPU进行拷贝，提高效率
+  	hx_init_bulk_ring()分配DMA内存空间并初始化所有ring寄存器。
+  	polling_ring()为轮询线程，接收算核返回的数据。
+  	pqc_get_response()接收PQC数据
+  	pub_get_response()接收SM2、RSA和TRNG数据
+  	
+ 
+7.static int hx_probe(struct pci_dev *pdev, const struct pci_device_id *id)为PCIE设备程序入口
+	HX_NORMAL_DEVICE 0x8024为PCIE设备ID	
+  	hx_chrdev_setup()定义/dev/hx-dev字符设备，以便应用层调取
+ 
+
+  	
+  	
+  	
+  	
+  	
+  	
+  	
+  	
+  	
+  	
